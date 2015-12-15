@@ -1,6 +1,9 @@
 # NetFirewall-Unblock
 PowerShell helper script to quickly find blocked applications and create Allow rules
 
+## The why
+I usually tend to set up my firewall to block everything at first and then slowly create Allow rules per app. The thing is, often larger applications have multiple components that need to connect outside (for example, the Dropbox Updater etc.) which may fail silently. Instead of having to dig through the security event log, then manually create rules and try again, I decided it was time to finally get into PowerShell. Maybe it's useful for someone else.
+
 ## Description
 The script takes history amount of event messages from the Security Event Log where Firewall rules caused packets in a certain direction to be dropped.
 The blocked applications are then shown as a list for the user to select. Upon selection an Allow rule will be created if it does not yet exist, or an existing Block rule will be changed to Allow.

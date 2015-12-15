@@ -38,17 +38,17 @@ param(
 # Directions are not showing up as "Inbound" or "Outbound" but as what I presume are String identifiers?
 # Inbound %%14592
 # Outbound %%14593
-if ($direction -eq "Outbound")
-{
-    $directionNumeric = "%%14593"
-}
-else
-{
-    $directionNumeric = "%%14592"
-}
-$action = "Allow"
 
 $mainFunction = {
+    if ($direction -eq "Outbound")
+    {
+        $directionNumeric = "%%14593"
+    }
+    else
+    {
+        $directionNumeric = "%%14592"
+    }
+    $action = "Allow"
     $ArrList = [System.Collections.ArrayList]@()
     $output = Get-EventLog -LogName Security -Newest $history -EntryType FailureAudit | Where-Object -Property ReplacementStrings -eq $directionNumeric | % {
         if ($_.ReplacementStrings[1].length -gt 3)  # we'll ignore entries that have no program path data (they show up as "-")
@@ -59,7 +59,7 @@ $mainFunction = {
     #$ArrList.Sort()  # needs to be sorted for Get-Unique to work (but we use select -unique now so it doesn't matter)
     $uniques = @( $ArrList.ToArray() | select -Unique )  # force result to be an array even if there is only one result
 
-    "Recently Blocked {0} Processes: " -f $direction
+    "`nRecently Blocked {0} Processes: " -f $direction
     For($counter=0; $counter -lt $uniques.Length; $counter++)
     {
         # sometime paths are not stored as file system paths but rather as physical paths. firewall rules can't deal with those so we have to translate them
@@ -91,7 +91,7 @@ $mainFunction = {
         "{0}: {1}{2}" -f $counter, $addedText, $fullpath
     }
 
-    "Select entry to Allow: (0-{0} / r to refresh / x to exit)" -f ($counter-1)
+    "Select entry to Allow: (0-{0} / enter to refresh / x to exit / d to switch direction )" -f ($counter-1)
 }
 
 # we'll just loop through the script indefinitely until either x or ctrl-c are pressed
@@ -103,7 +103,18 @@ while ($true)
     {
         exit
     }
-    elseif ($x -like "r" -OR $x -like "")
+    elseif ($x -like "d")
+    {
+        if ($direction -eq "Outbound")
+        {
+            $direction = "Inbound"
+        }
+        else
+        {
+            $direction = "Outbound"
+        }
+    }
+    elseif ($x -like "")
     {
         # do nothing, repeat
     }

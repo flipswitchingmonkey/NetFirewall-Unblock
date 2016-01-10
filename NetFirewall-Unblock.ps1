@@ -39,6 +39,35 @@ param(
 # Inbound %%14592
 # Outbound %%14593
 
+# Build System Assembly in order to call Kernel32:QueryDosDevice. 
+$DynAssembly = New-Object System.Reflection.AssemblyName('SysUtils')
+$AssemblyBuilder = [AppDomain]::CurrentDomain.DefineDynamicAssembly($DynAssembly, [Reflection.Emit.AssemblyBuilderAccess]::Run)
+$ModuleBuilder = $AssemblyBuilder.DefineDynamicModule('SysUtils', $False)
+ 
+# Define [Kernel32]::QueryDosDevice method
+$TypeBuilder = $ModuleBuilder.DefineType('Kernel32', 'Public, Class')
+$PInvokeMethod = $TypeBuilder.DefinePInvokeMethod('QueryDosDevice', 'kernel32.dll', ([Reflection.MethodAttributes]::Public -bor [Reflection.MethodAttributes]::Static), [Reflection.CallingConventions]::Standard, [UInt32], [Type[]]@([String], [Text.StringBuilder], [UInt32]), [Runtime.InteropServices.CallingConvention]::Winapi, [Runtime.InteropServices.CharSet]::Auto)
+$DllImportConstructor = [Runtime.InteropServices.DllImportAttribute].GetConstructor(@([String]))
+$SetLastError = [Runtime.InteropServices.DllImportAttribute].GetField('SetLastError')
+$SetLastErrorCustomAttribute = New-Object Reflection.Emit.CustomAttributeBuilder($DllImportConstructor, @('kernel32.dll'), [Reflection.FieldInfo[]]@($SetLastError), @($true))
+$PInvokeMethod.SetCustomAttribute($SetLastErrorCustomAttribute)
+$Kernel32 = $TypeBuilder.CreateType()
+ 
+$Max = 65536
+$StringBuilder = New-Object System.Text.StringBuilder($Max)
+
+$DriveMapping = @{}
+
+Get-WmiObject Win32_Volume | ? { $_.DriveLetter } | % {
+    $ReturnLength = $Kernel32::QueryDosDevice($_.DriveLetter, $StringBuilder, $Max)
+ 
+    if ($ReturnLength)
+    {
+        $DriveMapping.Add($StringBuilder.ToString(), $_.DriveLetter)
+    }
+}
+
+
 $mainFunction = {
     if ($direction -eq "Outbound")
     {
@@ -65,9 +94,18 @@ $mainFunction = {
         # sometime paths are not stored as file system paths but rather as physical paths. firewall rules can't deal with those so we have to translate them
         if ($uniques[$counter] -like "\device\harddiskvolume*") 
         {
-            $driveLetter = Get-Volume -FilePath ($uniques[$counter] -as [string])
+            $matchresult = $uniques[$counter] -match "\\device\\harddiskvolume.?"
+            if ($matchresult -eq "True") {
+                $driveletter = $DriveMapping.($matches[0])
+            }
+            else
+            {
+                $driveletter = "?:"
+            }
+            #$driveLetter = Get-Volume -FilePath ($uniques[$counter] -as [string])
             $path = $uniques[$counter] -replace "\\device\\harddiskvolume.?\\"
-            $fullpath =  (Join-Path -Path ($driveLetter.DriveLetter + ':') -Childpath ($path -as [string]))
+            #$fullpath =  (Join-Path -Path ($driveLetter.DriveLetter + ':') -Childpath ($path -as [string]))
+            $fullpath =  (Join-Path -Path ($driveLetter) -Childpath ($path -as [string]))
             $uniques[$counter] = $fullpath  # in case we have translated the path, replace the original with the translated version
         }
         else

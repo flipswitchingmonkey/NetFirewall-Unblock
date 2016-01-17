@@ -79,6 +79,7 @@ $mainFunction = {
     }
     $action = "Allow"
     $ArrList = [System.Collections.ArrayList]@()
+
     $output = Get-EventLog -LogName Security -Newest $history -EntryType FailureAudit | Where-Object -Property ReplacementStrings -eq $directionNumeric | % {
         if ($_.ReplacementStrings[1].length -gt 3)  # we'll ignore entries that have no program path data (they show up as "-")
         {
@@ -88,7 +89,7 @@ $mainFunction = {
     #$ArrList.Sort()  # needs to be sorted for Get-Unique to work (but we use select -unique now so it doesn't matter)
     $uniques = @( $ArrList.ToArray() | select -Unique )  # force result to be an array even if there is only one result
 
-    "`nRecently Blocked {0} Processes: " -f $direction
+    "`nRecently Blocked {0} Processes: (based on {1} last event log entries)" -f $direction, $history
     For($counter=0; $counter -lt $uniques.Length; $counter++)
     {
         # sometime paths are not stored as file system paths but rather as physical paths. firewall rules can't deal with those so we have to translate them
@@ -129,7 +130,7 @@ $mainFunction = {
         "{0}: {1}{2}" -f $counter, $addedText, $fullpath
     }
 
-    "Select entry to Allow: (0-{0} / enter to refresh / x to exit / d to switch direction )" -f ($counter-1)
+    "Select entry to Allow: (0-{0} / enter to refresh / x to exit / d to switch direction / h### change number of entries )" -f ($counter-1)
 }
 
 # we'll just loop through the script indefinitely until either x or ctrl-c are pressed
@@ -150,6 +151,17 @@ while ($true)
         else
         {
             $direction = "Outbound"
+        }
+    }
+    elseif ($x.Length -gt 1 -and $x.Substring(0,1) -like "h")
+    {
+        Try
+        {
+            $history = [convert]::ToInt32($x.Substring(1), 10)
+        }
+        Catch
+        {
+            Write-Host "invalid command: {0}" -f $x
         }
     }
     elseif ($x -like "")

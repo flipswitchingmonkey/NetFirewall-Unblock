@@ -39,6 +39,8 @@ param(
 # Inbound %%14592
 # Outbound %%14593
 
+$auditType = "FailureAudit"
+
 # Build System Assembly in order to call Kernel32:QueryDosDevice. 
 $DynAssembly = New-Object System.Reflection.AssemblyName('SysUtils')
 $AssemblyBuilder = [AppDomain]::CurrentDomain.DefineDynamicAssembly($DynAssembly, [Reflection.Emit.AssemblyBuilderAccess]::Run)
@@ -80,7 +82,20 @@ $mainFunction = {
     $action = "Allow"
     $ArrList = [System.Collections.ArrayList]@()
 
-    $output = Get-EventLog -LogName Security -Newest $history -EntryType FailureAudit | Where-Object -Property ReplacementStrings -eq $directionNumeric | % {
+    if ($auditType -eq "FailureAudit, SuccessAudit")
+    {
+        $theLog = Get-EventLog -LogName Security -Newest $history -EntryType FailureAudit, SuccessAudit
+    }
+    elseif ($auditType -eq "FailureAudit")
+    {
+        $theLog = Get-EventLog -LogName Security -Newest $history -EntryType FailureAudit
+    }
+    elseif ($auditType -eq "SuccessAudit")
+    {
+        $theLog = Get-EventLog -LogName Security -Newest $history -EntryType SuccessAudit
+    }
+
+    $output = $theLog | Where-Object -Property ReplacementStrings -eq $directionNumeric | % {
         if ($_.ReplacementStrings[1].length -gt 3)  # we'll ignore entries that have no program path data (they show up as "-")
         {
             $ArrList.Add($_.ReplacementStrings[1])  # fetch the application path
@@ -89,7 +104,19 @@ $mainFunction = {
     #$ArrList.Sort()  # needs to be sorted for Get-Unique to work (but we use select -unique now so it doesn't matter)
     $uniques = @( $ArrList.ToArray() | select -Unique )  # force result to be an array even if there is only one result
 
-    "`nRecently Blocked {0} Processes: (based on {1} last event log entries)" -f $direction, $history
+    if ($auditType -eq "FailureAudit, SuccessAudit")
+    {
+        "`nRecent {0} Activity: (based on {1} last event log entries) {2}" -f $direction, $history, $auditType
+    }
+    if ($auditType -eq "FailureAudit")
+    {
+        "`nRecently Blocked {0} Processes: (based on {1} last event log entries) {2}" -f $direction, $history, $auditType
+    }
+    if ($auditType -eq "SuccessAudit")
+    {
+        "`nRecently Allowed {0} Processes: (based on {1} last event log entries) {2}" -f $direction, $history, $auditType
+    }
+
     For($counter=0; $counter -lt $uniques.Length; $counter++)
     {
         # sometime paths are not stored as file system paths but rather as physical paths. firewall rules can't deal with those so we have to translate them
@@ -113,25 +140,42 @@ $mainFunction = {
         {
             $fullpath = $uniques[$counter]
         }
-        $addedText = ""
+        $addedText = "(----)"
+        $ruleInfo = ""
+        $foreground = "White"
         if($checkIfExists -like "Yes")
         {
             try {
                 $lookup = Get-NetFirewallApplicationFilter -Program $fullpath -PolicyStore ActiveStore -ErrorAction Stop
                 if ($lookup -ne $null)
                 {
-                    $addedText = "(*)"
+                    $addedText = "(rule)"
+                    $lookupRule = Get-NetFirewallRule -AssociatedNetFirewallApplicationFilter $lookup
+                    if ($lookupRule -ne $null)
+                    {
+                        $ruleInfo = "(" + $lookupRule.Direction.ToString() + ":" + $lookupRule.Action.ToString() + ")"
+                        if ($lookupRule.Action -eq "Allow")
+                        {
+                            $foreground = "Green"
+                        }
+                        if ($lookupRule.Action -eq "Block")
+                        {
+                            $foreground = "Red"
+                        }
+                    }
                 }
             }
             catch {
             
             }
         }
-        "{0}: {1}{2}" -f $counter, $addedText, $fullpath
+        $output = " {0}: {1} {2} {3}" -f $counter, $addedText, $fullpath, $ruleInfo
+        Write-Host $output -ForegroundColor $foreground
     }
 
-    "Select entry to Allow: (0-{0} / enter to refresh / x to exit / d to switch direction / h### change number of entries )" -f ($counter-1)
+    "Commands: (0-{0} / refresh[enter] / exit[x] / direction[d] / entries[n###] / auditType[aA/aF/aS] )" -f ($counter-1)
 }
+
 
 # we'll just loop through the script indefinitely until either x or ctrl-c are pressed
 while ($true)
@@ -153,7 +197,7 @@ while ($true)
             $direction = "Outbound"
         }
     }
-    elseif ($x.Length -gt 1 -and $x.Substring(0,1) -like "h")
+    elseif ($x.Length -gt 1 -and $x.Substring(0,1) -like "n")
     {
         Try
         {
@@ -164,6 +208,37 @@ while ($true)
             Write-Host "invalid command: {0}" -f $x
         }
     }
+    elseif ($x.Length -gt 1 -and $x.Substring(0,1) -like "a")
+    {
+        if ($x.Substring(1,1) -like "A")
+        {
+            $auditType = "FailureAudit, SuccessAudit"
+        }
+        elseif ($x.Substring(1,1) -like "F")
+        {
+            $auditType = "FailureAudit"
+        }
+        elseif ($x.Substring(1,1) -like "S")
+        {
+            $auditType = "SuccessAudit"
+        }
+    }
+    elseif ($x -like "h")
+    {
+        Write-Host "Help:"
+        $temp = "0-{0}`t Create a new Allow rule for application" -f ($counter-1)
+        Write-Host $temp
+        $temp = "b0-{0}`t Create a new Block rule for application" -f ($counter-1)
+        Write-Host $temp
+        Write-Host "[enter]`t Refresh view"
+        Write-Host "[d]`t`t Change between Inbound and Outbound"
+        Write-Host "[n###]`t Analyze this number of event log entries (e.g. n10000)"
+        Write-Host "[aA]`t Show successful and failed audit events"
+        Write-Host "[aF]`t Show failed audit events only"
+        Write-Host "[aS]`t Show successful audit events only"
+        Write-Host "[h]`t`t This help"
+        Write-Host "[x]`t`t Exit Program"
+    }
     elseif ($x -like "")
     {
         # do nothing, repeat
@@ -171,14 +246,26 @@ while ($true)
     else
     {
         $pName = Split-Path $uniques[$x] -Leaf  # the filename will be used as the DisplayName for the new rule
+        Write-Host "Allow(a) or Block(b)? (default: b)"
+        $answer = $host.UI.ReadLine()
+        if ($answer -like "a")
+        {
+            $action = "Allow"
+        }
+        else
+        {
+            $action = "Block"
+        }
+
         try {
             $lookup = Get-NetFirewallApplicationFilter -Program $uniques[$x] -PolicyStore ActiveStore  -ErrorAction Stop | Get-NetFirewallRule -Direction $direction -PolicyStore ActiveStore -ErrorAction Stop
             Set-NetFirewallRule -Action $action -Program $uniques[$x] -Name $lookup.Name -Direction $direction
+            "Changing {0} rule for {1}" -f $direction, $uniques[$x]
             Get-NetFirewallRule -PolicyStore ActiveStore -Name $lookup.name
         }
         catch {
             "No rule found for {0}" -f $uniques[$x]
-            "Creating Outbound Allow rule for {0}" -f $uniques[$x]
+            "Creating {0} rule for {1}" -f $direction, $uniques[$x]
             New-NetFirewallRule -Action $action -Program $uniques[$x] -DisplayName $pName -Direction $direction
         }
     }
